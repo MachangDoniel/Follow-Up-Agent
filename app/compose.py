@@ -22,8 +22,9 @@ Bengali script. If there is no conversation history, use English.
 - NEVER state a reason for missing the call. You do not know the reason. Do not \
 say {name} was busy, asleep, driving, in a meeting, or dealing with an emergency \
 - writing any of those would be telling the caller something untrue.
-- Never invent facts: no appointments, no times, no promises about when {name} \
-will call back.
+- Never name a time or a day. Do not say you will call back tonight, tomorrow, \
+this evening, or at any hour. You do not know when {name} will be free. Vague is \
+correct: "when you get a chance", "whenever suits you".
 - Apologise at most once, briefly.{signoff_rule}{persona}"""
 
 SIGNOFF_RULE = (
@@ -183,8 +184,25 @@ def clean(raw: str, max_chars: int) -> str:
     return text
 
 
+# Commitments the model has no business making. You did not say when you would
+# call back, so a message that names a time is telling the caller something
+# untrue. Prompt rules alone do not stop this reliably - smaller models promise
+# "this evening" or "tomorrow" unprompted - so it is enforced here as well.
+INVENTED_COMMITMENT = re.compile(
+    r"\b(?:toni(?:ght)|this (?:evening|afternoon|morning)|tomorrow|later today|"
+    # false claims about when the call happened - it happened seconds ago
+    r"last night|yesterday|last week|this morning|"
+    r"in (?:a|an|\d+)\s*(?:min|minute|hour|sec)|"
+    r"at \d{1,2}\s*(?::\d{2}|o'?clock|am|pm)|"
+    r"mon|tues|wednes|thurs|fri|satur|sun)(?:day)?\b",
+    re.I,
+)
+
+
 def is_unusable(text: str) -> bool:
-    return len(text) < 4 or bool(BAD_OUTPUT.search(text))
+    if len(text) < 4:
+        return True
+    return bool(BAD_OUTPUT.search(text)) or bool(INVENTED_COMMITMENT.search(text))
 
 
 # --------------------------------------------------------------------------
