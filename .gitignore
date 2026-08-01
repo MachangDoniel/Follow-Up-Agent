@@ -1,0 +1,27 @@
+# ---------------------------------------------------------------------------
+# Everything in data/ and logs/ is private: account credentials, real messages,
+# real phone numbers. Ignore the directories wholesale and allow back only the
+# placeholder, so a new file landing in there is never accidentally committed.
+#
+# data/ contains, among other things:
+#   telegram.session       a complete login to your Telegram account
+#   whatsapp-auth/         a complete login to your WhatsApp account
+#   whatsapp-history.json  real message text from real people
+#   whatsapp-lid-map.json  real phone numbers
+#   followups.sqlite3      every message the agent has sent
+# ---------------------------------------------------------------------------
+data/*
+!data/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# your real configuration - .env.example is the committed template
+.env
+.env.local
+
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+.ruff_cache/
+.DS_Store
