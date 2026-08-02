@@ -164,8 +164,19 @@ The map is built two ways because neither alone is enough: pre-resolution covers
 people you've configured but never messaged, and message-learning covers
 everyone else over time.
 
-**Consequence worth knowing:** clearing `ALLOW` disables pre-resolution, so
-unknown LID callers lose their history and drop to the fixed text.
+**The ALLOW/BLOCK trade-off:**
+
+| Config | Pros | Cons |
+| --- | --- | --- |
+| `ALLOW=` (empty) | Everyone gets a reply; no manual allow-list maintenance | First-call LID strangers get fixed text; history appears after ~1-2 messages |
+| `ALLOW=phone1,phone2,…` | Configured contacts get history + generated message on first call | Strangers get silence; manual maintenance burden |
+
+An empty `ALLOW` doesn't disable replies — it enables them for *everyone*. It only
+disables LID pre-resolution, which is a performance trade-off, not a correctness one.
+Most callers arrive as phone JIDs (`@s.whatsapp.net`), so they're matched and resolved
+immediately. LID pre-resolution only matters for the small fraction of first-time LID
+callers, and even then they get a working reply — just not personalized until the map
+learns their number.
 
 ---
 
