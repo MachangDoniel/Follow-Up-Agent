@@ -130,6 +130,16 @@ class Settings:
     brain_host: str
     brain_port: int
 
+    # notifications to you, via a separate BotFather bot
+    notify_enabled: bool
+    notify_bot_token: str
+    notify_chat_id: str
+    notify_image: bool
+    notify_history: int
+    notify_bursts: bool
+    whatsapp_control_port: int
+    sweep_window_minutes: int
+
     database_path: Path
     log_level: str
     log_file: Path
@@ -180,6 +190,16 @@ class Settings:
                 "there would be no room left for the message itself."
             )
 
+        notify_enabled = _bool("NOTIFY_ENABLED", False)
+        notify_token = _str("NOTIFY_BOT_TOKEN")
+        notify_chat_id = _str("NOTIFY_CHAT_ID")
+        if notify_enabled and not (notify_token and notify_chat_id):
+            raise ConfigError(
+                "NOTIFY_ENABLED is true but NOTIFY_BOT_TOKEN/NOTIFY_CHAT_ID are not both "
+                "set. Create a bot with @BotFather, send it any message, then read your "
+                "chat id from https://api.telegram.org/bot<TOKEN>/getUpdates."
+            )
+
         return cls(
             lmstudio_base_url=_str("LMSTUDIO_BASE_URL", "http://localhost:1234/v1").rstrip("/"),
             lmstudio_model=_str("LMSTUDIO_MODEL", "google/gemma-4-e4b"),
@@ -210,6 +230,14 @@ class Settings:
             telegram_session=_path("TELEGRAM_SESSION", "data/telegram.session"),
             brain_host=_str("BRAIN_HOST", "127.0.0.1"),
             brain_port=_int("BRAIN_PORT", 8787),
+            notify_enabled=notify_enabled,
+            notify_bot_token=notify_token,
+            notify_chat_id=notify_chat_id,
+            notify_image=_bool("NOTIFY_IMAGE", True),
+            notify_history=_int("NOTIFY_HISTORY", 5),
+            notify_bursts=_bool("NOTIFY_BURSTS", True),
+            whatsapp_control_port=_int("WHATSAPP_CONTROL_PORT", 8788),
+            sweep_window_minutes=_int("SWEEP_WINDOW_MINUTES", 60),
             database_path=_path("DATABASE_PATH", "data/followups.sqlite3"),
             log_level=_str("LOG_LEVEL", "INFO").upper(),
             log_file=_path("LOG_FILE", "logs/call-followup.log"),

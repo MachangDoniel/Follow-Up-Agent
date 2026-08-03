@@ -13,7 +13,8 @@ from telethon import TelegramClient, events, types
 
 from .config import Settings
 from .decide import Decider
-from .models import Message, MessageBurst, MissedCall
+from .models import Message, MessageBurst, MissedCall, SendEvent
+from .notify import Notifier
 
 log = logging.getLogger(__name__)
 
@@ -36,9 +37,10 @@ def display_name(entity: object) -> str:
 
 
 class TelegramWatcher:
-    def __init__(self, settings: Settings, decider: Decider) -> None:
+    def __init__(self, settings: Settings, decider: Decider, notifier: Notifier) -> None:
         self._settings = settings
         self._decider = decider
+        self._notifier = notifier
         settings.telegram_session.parent.mkdir(parents=True, exist_ok=True)
         self._client = TelegramClient(
             str(settings.telegram_session),
@@ -50,10 +52,16 @@ class TelegramWatcher:
         # user id -> messages they have sent since your last reply
         self._unanswered: dict[int, int] = {}
 
+    async def send(self, contact_id: str, text: str) -> None:
+        """Used by a sweep, which decides in the brain but sends from here."""
+        await self._client.send_message(int(contact_id), text)
+
     async def run(self) -> None:
         self._client.add_event_handler(self._on_raw, events.Raw)
-        if self._settings.burst_enabled:
-            self._client.add_event_handler(self._on_message, events.NewMessage())
+        # Always count, whatever the burst setting says right now: the setting is
+        # switchable from the Telegram bot mid-run, and a counter that only
+        # starts when you flip it would need a restart to become useful.
+        self._client.add_event_handler(self._on_message, events.NewMessage())
         await self._client.start()
         me = await self._client.get_me()
         log.info("watching Telegram calls for %s", display_name(me))
@@ -144,6 +152,24 @@ class TelegramWatcher:
             await self._client.send_message(caller_id, decision.text)
         except Exception:
             log.exception("sending follow-up to %s failed", name)
+            return
+
+        # Only after the send really landed - a notification about a message that
+        # never arrived would be worse than no notification at all.
+        await self._notifier.notify(
+            SendEvent(
+                platform="telegram",
+                contact_id=str(caller_id),
+                contact_name=name,
+                kind="call",
+                text=decision.text,
+                occurred_at=started_at,
+                contact_handle=getattr(entity, "username", "") or "",
+                reason=reason,
+                video=video,
+                history=call.history,
+            )
+        )
 
     async def _on_message(self, event) -> None:
         """Count consecutive incoming messages, and reply once at the threshold."""
@@ -171,21 +197,35 @@ class TelegramWatcher:
         name = display_name(entity)
         log.info("%d unanswered messages from %s", count, name)
 
-        decision = await self._decider.decide_burst(
-            MessageBurst(
-                platform="telegram",
-                contact_id=str(getattr(entity, "id", chat_id)),
-                contact_name=name,
-                count=count,
-                history=await self._history(chat_id),
-            )
+        burst = MessageBurst(
+            platform="telegram",
+            contact_id=str(getattr(entity, "id", chat_id)),
+            contact_name=name,
+            count=count,
+            history=await self._history(chat_id),
         )
+        decision = await self._decider.decide_burst(burst)
         if not decision.send:
             return
         try:
             await self._client.send_message(chat_id, decision.text)
         except Exception:
             log.exception("burst reply to %s failed", name)
+            return
+
+        await self._notifier.notify(
+            SendEvent(
+                platform="telegram",
+                contact_id=burst.contact_id,
+                contact_name=name,
+                kind="burst",
+                text=decision.text,
+                occurred_at=time.time(),
+                contact_handle=getattr(entity, "username", "") or "",
+                count=count,
+                history=burst.history,
+            )
+        )
 
     async def _replied_since(self, caller_id: int, started_at: float) -> bool:
         """True if you have sent this contact anything since the call began."""

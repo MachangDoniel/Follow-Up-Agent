@@ -108,6 +108,10 @@ Everything lives in `.env`. Real environment variables override the file.
 | `QUIET_HOURS` | `23:00-07:00` | Comma-separated `HH:MM-HH:MM`. Wrapping past midnight works. |
 | `MAX_TOKENS` | `2000` | Generation budget. Keep it generous — see below. |
 | `TELEGRAM_ENABLED` | `true` | Set false to run WhatsApp only. |
+| `NOTIFY_ENABLED` | `false` | Ping you on Telegram after every reply that goes out — see below. |
+| `NOTIFY_IMAGE` | `true` | Attach a rendered card of the conversation. |
+| `NOTIFY_HISTORY` | `5` | How many recent messages the card shows. |
+| `NOTIFY_BURSTS` | `true` | Notify on burst replies too, not just missed calls. |
 
 Sensible first configuration: leave `DRY_RUN` on, and put one or two people you
 trust in `ALLOW` so the first live test can't reach anyone else.
@@ -252,6 +256,112 @@ reduced by the signature length, so a long reply can't push the total over. If
 the model signs anyway, the duplicate is detected (ignoring case, spacing and
 punctuation) and not stamped twice.
 
+## Telling you what it did
+
+The agent answers people while you are not looking, which is the whole point and
+also the uncomfortable part. `NOTIFY_ENABLED=true` closes that loop: every time a
+reply actually lands, a Telegram bot messages you with who it was, on which
+platform, when, and exactly what was said in your name.
+
+```
+📞 Missed call · WhatsApp
+👤 Shujoy +8801787308210
+🕐 11:42 PM, 3 Aug · 4 min ago
+💬 Open the chat            ← wa.me link, opens the app on the number that called
+
+↩️ Replied:
+> hey sorry, couldn't pick up just now — i'll call you back in a bit.
+```
+
+Attached is a card showing the last few messages of that conversation plus the
+reply, drawn from the history the watchers already keep.
+
+The number sits in a code span, so a tap copies it; the link below it opens the
+conversation.
+
+**The link has to be `wa.me` / `t.me`, not `whatsapp://` / `tg://`.** Telegram
+drops link entities whose scheme it does not recognise — the API answers
+`ok: true` and then renders the anchor as dead plain text, which looks exactly
+like a bug in this agent. On a phone the OS hands a `wa.me` link straight to the
+installed WhatsApp anyway; the trip through `web.whatsapp.com` and its QR code
+only happens on a desktop with no app registered. The one exception is
+`tg://user?id=`, which Telegram keeps as a tappable mention and is all there is
+for a Telegram contact with no username.
+
+WhatsApp callers who arrive as an opaque `@lid` get no link at all: a LID is not
+a phone number, and a dead link is worse than none.
+
+**This is a BotFather bot, not your user session.** The Telethon session in
+`telegram_watcher.py` *is* you — anything it sends goes to someone else's chat. A
+bot can only message people who have written to it first, which is exactly the
+property you want for a channel pointed at yourself.
+
+1. Message [@BotFather](https://t.me/BotFather) → `/newbot` → copy the token into
+   `NOTIFY_BOT_TOKEN`
+2. Send your new bot any message — it cannot start the chat
+3. Open `https://api.telegram.org/bot<TOKEN>/getUpdates` and copy
+   `result[0].message.chat.id` into `NOTIFY_CHAT_ID`
+4. Set `NOTIFY_ENABLED=true`, then check it without waiting for a real call:
+
+```bash
+uv run python scripts/test_notify.py
+```
+
+Notifications fire at the send site, after the send succeeded — not from the
+Decider, which commits to sending before anyone performs it. A send that fails
+notifies nothing, and a notification that fails is logged and swallowed. It can
+never cost you a reply.
+
+## Controlling it from the bot
+
+The same bot takes commands, so you can steer the agent from your phone without
+touching the machine. Send `/help` for the list.
+
+| | |
+| --- | --- |
+| `/off` · `/off 2h` · `/on` | master switch, optionally for a while |
+| `/whatsapp off` · `/telegram off` | one platform at a time |
+| `/calls on` · `/calls off` | the missed-call follow-up itself |
+| `/burst on` · `/burst off` | the 5-unanswered-messages reply |
+| `/dryrun on` | generate and log, send nothing |
+| `/block Shujoy` · `/unblock Shujoy` | never reply to someone, undo it |
+| `/allow Shujoy` · `/unallow Shujoy` | reply to **only** these people |
+| `/status` · `/recent` · `/blocked` · `/allowed` | what it is doing, and what it has done |
+| `/reset` | drop every override, back to `.env` |
+
+These are **runtime overrides**, kept in a `controls` table in sqlite rather than
+written back to `.env`. A pause therefore survives a restart, and `/reset` is
+always the way home. `Settings` stays frozen: config you chose is one thing,
+switches you flip from your phone are another.
+
+**Only `NOTIFY_CHAT_ID` is obeyed.** Anyone can find a bot and message it, so
+every update from another chat is dropped and logged, with no reply at all — an
+unauthorised sender should not even learn the bot does anything.
+
+`/allow` is the sharp one: an allow list is a whitelist, so going from empty to a
+single entry silences *everyone else* at once. The bot says exactly that, in
+those words, the first time an entry goes in — the danger is that it looks like
+nothing happened until a call from someone else quietly gets no reply.
+
+Two consequences worth knowing, both deliberate:
+
+- The Node watcher no longer checks `BURST_REPLY_ENABLED` itself; it asks the
+  brain at the threshold and the brain answers. Otherwise `/burst on` would need
+  a restart of a process it cannot reach.
+- The Telegram watcher counts unanswered messages whether or not bursts are on,
+  for the same reason — a counter that only starts when you flip the switch is
+  useless the moment you flip it.
+
+### Why a rendered card and not a screenshot
+
+A real `screencapture` of WhatsApp needs the Mac awake **and unlocked**, which is
+precisely what it isn't when you're away from it missing calls; it needs Screen
+Recording permission; it only covers WhatsApp, since the Telegram side speaks
+MTProto and has no desktop app in this setup; and it grabs whichever chat happens
+to be on screen rather than the one that matters. Drawing the conversation from
+the history already in memory has none of those failure modes and always shows
+the right chat. Set `NOTIFY_IMAGE=false` for text-only notifications.
+
 ## Guardrails
 
 Generated text is stripped of wrapping quotes and "Here's a message:"
@@ -310,7 +420,10 @@ app/
   store.py             sqlite cooldown + audit trail
   brain.py             HTTP endpoint for the Node watcher
   telegram_watcher.py  Telethon MTProto call detection
+  notify.py            tells you, via a bot, what was sent in your name
+  render.py            draws the conversation card the notification carries
 whatsapp/watcher.js    Baileys call detection (separate process)
 scripts/selftest.py    pre-flight check
+scripts/test_notify.py send yourself one fake notification
 scripts/service.sh     launchd management for both processes
 ```

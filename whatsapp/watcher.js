@@ -19,6 +19,7 @@
  */
 
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -32,6 +33,7 @@ import { Boom } from '@hapi/boom';
 import dotenv from 'dotenv';
 import pino from 'pino';
 import qrcode from 'qrcode-terminal';
+import qrimage from 'qrcode';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
@@ -40,6 +42,7 @@ dotenv.config({ path: path.join(ROOT, '.env'), quiet: true });
 const DATA_DIR = path.join(ROOT, 'data');
 const AUTH_DIR = path.join(DATA_DIR, 'whatsapp-auth');
 const HISTORY_PATH = path.join(DATA_DIR, 'whatsapp-history.json');
+const QR_PATH = path.join(DATA_DIR, 'whatsapp-qr.png');
 
 const BRAIN_URL = `http://${process.env.BRAIN_HOST || '127.0.0.1'}:${
   process.env.BRAIN_PORT || 8787
@@ -113,8 +116,12 @@ function remember(jid, from, text, pushName) {
   if (from === 'me') {
     entry.lastOutgoingAt = Date.now();
     entry.unanswered = 0;
+    entry.unread = 0;
   } else {
     entry.unanswered = (entry.unanswered || 0) + 1;
+    // A sweep only looks at recent runs, so it needs to know when the last one
+    // of these actually landed.
+    entry.lastIncomingAt = Date.now();
   }
   entry.messages.push({ from, text: text.slice(0, 500) });
   if (entry.messages.length > HISTORY_MESSAGES) {
@@ -124,8 +131,113 @@ function remember(jid, from, text, pushName) {
   saveHistory();
 }
 
+// How far back a reconnect backlog is still worth counting. Long enough to
+// cover a restart or a short network drop, short enough that a history sync
+// cannot resurrect old conversations into the burst counter.
+const APPEND_MAX_AGE_MS = 15 * 60 * 1000;
+
+/** messageTimestamp is seconds, and may be a protobuf Long rather than a number. */
+function timestampOf(msg) {
+  const raw = msg.messageTimestamp;
+  if (raw == null) return NaN;
+  const seconds = typeof raw === 'object' && typeof raw.toNumber === 'function'
+    ? raw.toNumber()
+    : Number(raw);
+  return Number.isFinite(seconds) ? seconds * 1000 : NaN;
+}
+
+/** Message ids we have already counted, so a redelivery cannot count twice. */
+const seenMessages = new Map();
+const SEEN_TTL_MS = 30 * 60 * 1000;
+
+function alreadySeen(id) {
+  if (!id) return false;
+  const now = Date.now();
+  if (seenMessages.size > 500) {
+    for (const [key, at] of seenMessages) {
+      if (now - at > SEEN_TTL_MS) seenMessages.delete(key);
+    }
+  }
+  if (seenMessages.has(id)) return true;
+  seenMessages.set(id, now);
+  return false;
+}
+
+// --------------------------------------------------------------------------
+// contact names
+//
+// Two different names exist per contact and they are not interchangeable:
+// `notify` is the push name, chosen by the sender and only seen once they
+// message you; `name` is what YOU saved them as in your address book. The
+// address-book name is the one you would recognise ("Dr. Dinesh Shahbagh
+// bkash/nagad"), and WhatsApp only hands it over in contacts events - which
+// this watcher previously did not listen for at all.
+// --------------------------------------------------------------------------
+
+const CONTACTS_PATH = path.join(DATA_DIR, 'whatsapp-contacts.json');
+/** @type {Map<string, string>} jid -> address-book name */
+const contactNames = new Map();
+let contactsTimer = null;
+
+function loadContacts() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(CONTACTS_PATH, 'utf8'));
+    for (const [jid, name] of Object.entries(raw)) contactNames.set(jid, name);
+    if (contactNames.size) log(`loaded ${contactNames.size} contact names`);
+  } catch {
+    /* first run */
+  }
+}
+
+function saveContacts() {
+  clearTimeout(contactsTimer);
+  contactsTimer = setTimeout(() => {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFile(CONTACTS_PATH, JSON.stringify(Object.fromEntries(contactNames)), (err) => {
+      if (err) log('could not save contact names:', err.message);
+    });
+  }, 2000);
+}
+
+function rememberContact(contact) {
+  if (!contact?.id) return;
+  const jid = resolveJid(jidNormalizedUser(String(contact.id)));
+  const name = contact.name || contact.verifiedName || contact.notify || '';
+  if (!jid || !name || contactNames.get(jid) === name) return;
+  contactNames.set(jid, name);
+  saveContacts();
+}
+
+/**
+ * Unread counts, straight from WhatsApp.
+ *
+ * Our own `unanswered` counter only knows about messages seen while this
+ * process was running, so after a restart it under-reports. `unreadCount` is
+ * what the badge on your chat list shows, which is what you are actually
+ * looking at when you ask who has been left hanging. A sweep takes whichever
+ * is larger. Baileys uses -1 for "manually marked unread", hence the clamp.
+ */
+function rememberChatMeta(chat) {
+  if (!chat?.id) return;
+  const jid = resolveJid(jidNormalizedUser(String(chat.id)));
+  if (!jid.endsWith('@s.whatsapp.net')) return;
+  if (typeof chat.unreadCount !== 'number') return;
+  const entry = chats.get(jid) || { messages: [] };
+  entry.unread = Math.max(0, chat.unreadCount);
+  chats.set(jid, entry);
+  saveHistory();
+}
+
 function displayName(jid) {
-  return chats.get(jid)?.name || `+${jid.split('@')[0]}`;
+  const saved = contactNames.get(jid);
+  if (saved) return saved;
+  const known = chats.get(jid)?.name;
+  if (known) return known;
+  // Never dress a LID up as a phone number. `+87050648854572` looks like a
+  // contact you could recognise; it is an opaque WhatsApp id that resolved to
+  // nobody, and printing it with a + made an unknown caller look saved.
+  if (jid.endsWith('@lid')) return `unknown caller (lid ${jid.split('@')[0]})`;
+  return `+${jid.split('@')[0]}`;
 }
 
 /** Did you already message this person yourself since the call started? */
@@ -139,7 +251,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // burst replies: "he's busy, this is an automated reply" after N unanswered
 // --------------------------------------------------------------------------
 
-const BURST_ENABLED = (process.env.BURST_REPLY_ENABLED || 'false').toLowerCase() === 'true';
+// Whether bursts are enabled is the brain's call (and is switchable from the
+// Telegram bot at runtime); this side only needs to know when to ask.
 const BURST_THRESHOLD = Number(process.env.BURST_THRESHOLD || 5);
 
 /**
@@ -148,7 +261,9 @@ const BURST_THRESHOLD = Number(process.env.BURST_THRESHOLD || 5);
  * moment you reply, and the brain enforces its own multi-hour cooldown on top.
  */
 async function maybeBurstReply(sock, jid) {
-  if (!BURST_ENABLED) return;
+  // No local on/off check: the brain owns that, so /burst on from the Telegram
+  // bot takes effect without restarting this process. It answers `send: false`
+  // when bursts are off, which costs one local HTTP call at the threshold.
   const entry = chats.get(jid);
   if (!entry || entry.unanswered !== BURST_THRESHOLD) return;
 
@@ -169,11 +284,24 @@ async function maybeBurstReply(sock, jid) {
     log(`  no burst reply to ${name}: ${decision.skip_reason}`);
     return;
   }
+  const count = entry.unanswered;
+  const history = [...(entry.messages || [])];
+
   try {
     await sock.sendMessage(jid, { text: decision.text });
     remember(jid, 'me', decision.text);
     // remember() zeroed the run; the brain's cooldown is what prevents a repeat.
     log(`  burst reply sent to ${name}`);
+    reportSent({
+      platform: 'whatsapp',
+      contact_id: jid,
+      contact_name: name,
+      kind: 'burst',
+      text: decision.text,
+      occurred_at: Date.now() / 1000,
+      count,
+      history,
+    });
   } catch (err) {
     log(`  burst reply to ${name} failed:`, err.message);
   }
@@ -182,6 +310,22 @@ async function maybeBurstReply(sock, jid) {
 // --------------------------------------------------------------------------
 // brain
 // --------------------------------------------------------------------------
+
+/**
+ * Report a message that actually went out, so the brain can notify you.
+ *
+ * Called after the send, not instead of it: the brain's decision is a promise to
+ * send, and a send can still fail. Fire-and-forget - a notification that does
+ * not arrive must never hold up or break the watcher.
+ */
+function reportSent(payload) {
+  fetch(`${BRAIN_URL}/sent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(30_000),
+  }).catch((err) => log('  could not report the send for notification:', err.message));
+}
 
 async function askBrain(payload, path = '/followup') {
   try {
@@ -226,6 +370,7 @@ const TERMINATE_AS_MISSED =
 
 // id -> { jid, isVideo, isGroup, accepted }
 const activeCalls = new Map();
+let controlServer = null;
 
 /** Calls may address you by LID rather than phone JID; prefer the phone one. */
 function callerJid(call) {
@@ -280,24 +425,133 @@ function resolveJid(jid) {
   return jid.endsWith('@lid') ? lidMap.get(jid) || jid : jid;
 }
 
-/** Phone numbers listed in ALLOW/BLOCK, so we can pre-resolve their LIDs. */
-function configuredNumbers() {
-  const raw = `${process.env.ALLOW || ''},${process.env.BLOCK || ''}`;
-  return [...new Set(raw.split(',').map((s) => s.replace(/[^0-9]/g, '')).filter((s) => s.length >= 8))];
+/**
+ * Every phone number worth pre-resolving to a LID.
+ *
+ * Originally this was only ALLOW/BLOCK, which meant an empty ALLOW resolved
+ * nothing at all - so a call from anyone WhatsApp addressed by LID showed up as
+ * an unidentifiable stranger even when they were someone you talk to daily.
+ * Everyone you already have a chat with is included now: onWhatsApp() hands back
+ * each number's `lid`, which is the only way to build the lid -> phone direction.
+ */
+function knownNumbers() {
+  const fromChats = [...chats.keys()]
+    .filter((jid) => jid.endsWith('@s.whatsapp.net'))
+    .map((jid) => jid.split('@')[0]);
+  const configured = `${process.env.ALLOW || ''},${process.env.BLOCK || ''}`
+    .split(',')
+    .map((s) => s.replace(/[^0-9]/g, ''));
+  return [...new Set([...fromChats, ...configured].filter((s) => s.length >= 8))];
 }
 
 async function preresolveLids(sock) {
-  const numbers = configuredNumbers();
+  const numbers = knownNumbers();
   if (!numbers.length) return;
-  try {
-    const results = (await sock.onWhatsApp(...numbers)) || [];
-    for (const r of results) {
-      if (r?.lid && r?.jid) rememberLid(String(r.lid), String(r.jid));
+  let resolved = 0;
+  // Batched: onWhatsApp is one round trip per call, and a long contact list in
+  // a single request is the kind of thing WhatsApp rate-limits.
+  for (let i = 0; i < numbers.length; i += 20) {
+    const batch = numbers.slice(i, i + 20);
+    try {
+      const results = (await sock.onWhatsApp(...batch)) || [];
+      for (const r of results) {
+        if (r?.lid && r?.jid) {
+          rememberLid(String(r.lid), String(r.jid));
+          resolved += 1;
+        }
+      }
+    } catch (err) {
+      log('LID pre-resolution failed for a batch:', err.message);
     }
-    log(`pre-resolved ${results.length}/${numbers.length} configured numbers to LIDs`);
-  } catch (err) {
-    log('LID pre-resolution failed (allow list may not match LID callers):', err.message);
   }
+  log(`pre-resolved ${resolved}/${numbers.length} known numbers to LIDs`);
+}
+
+// --------------------------------------------------------------------------
+// control server
+//
+// The brain owns every decision, but only this process holds the socket. So it
+// exposes exactly two things on localhost: the chat list to decide from, and a
+// way to send a message the brain has already decided on. Deliberately not a
+// general-purpose API - localhost-only, and it makes no judgements of its own.
+// --------------------------------------------------------------------------
+
+const CONTROL_PORT = Number(process.env.WHATSAPP_CONTROL_PORT || 8788);
+
+function chatList() {
+  const out = [];
+  for (const [jid, entry] of chats) {
+    if (!jid.endsWith('@s.whatsapp.net')) continue;
+    out.push({
+      contact_id: jid,
+      contact_name: displayName(jid),
+      unanswered: entry.unanswered || 0,
+      unread: entry.unread || 0,
+      last_incoming_at: entry.lastIncomingAt || 0,
+      last_outgoing_at: entry.lastOutgoingAt || 0,
+      history: entry.messages || [],
+    });
+  }
+  return out;
+}
+
+function startControlServer(sock) {
+  const server = http.createServer(async (req, res) => {
+    const reply = (code, body) => {
+      res.writeHead(code, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(body));
+    };
+    try {
+      if (req.method === 'GET' && req.url === '/chats') return reply(200, { chats: chatList() });
+
+      if (req.method === 'POST' && req.url === '/send') {
+        let body = '';
+        for await (const chunk of req) body += chunk;
+        const { jid, text } = JSON.parse(body || '{}');
+        if (!jid || !text) return reply(400, { error: 'jid and text are required' });
+        await sock.sendMessage(jid, { text });
+        remember(jid, 'me', text);
+        log(`  sweep: sent to ${displayName(jid)}`);
+        return reply(200, { ok: true });
+      }
+      return reply(404, { error: 'not found' });
+    } catch (err) {
+      log('control server error:', err.message);
+      return reply(500, { error: err.message });
+    }
+  });
+  server.on('error', (err) => log('control server could not start:', err.message));
+  server.listen(CONTROL_PORT, '127.0.0.1', () =>
+    log(`control server on 127.0.0.1:${CONTROL_PORT}`),
+  );
+  return server;
+}
+
+/**
+ * Ask WhatsApp to resend the chat list and address book.
+ *
+ * A linked device is only sent this in full when it pairs. On every later
+ * connection it gets deltas, so a long-lived session ends up knowing nothing
+ * about chats it has not personally watched a message arrive in - which made a
+ * sweep blind to exactly the conversations you can see waiting on your phone.
+ *
+ * resyncAppState re-requests those collections without re-pairing. It is the
+ * same mechanism WhatsApp Web uses to recover from a stale local state.
+ */
+async function resyncMetadata(sock) {
+  const collections = ['critical_unblock_low', 'regular_high', 'regular_low', 'regular'];
+  for (const collection of collections) {
+    try {
+      await sock.resyncAppState([collection], true);
+    } catch (err) {
+      log(`app-state resync of ${collection} failed:`, err.message);
+    }
+  }
+  const unread = [...chats.values()].filter((e) => (e.unread || 0) > 0).length;
+  log(
+    `app-state resync done: ${chats.size} chats known, ${contactNames.size} names, ` +
+      `${unread} with unread messages`,
+  );
 }
 
 async function start() {
@@ -309,19 +563,45 @@ async function start() {
     auth: state,
     logger: pino({ level: 'silent' }),
     markOnlineOnConnect: false, // don't steal notifications from your phone
-    syncFullHistory: false,
+    // Asks WhatsApp for the chat list and unread state. Without it a linked
+    // device only learns about chats it personally watches a message arrive
+    // in, which left /sweep blind to conversations already waiting.
+    syncFullHistory: true,
   });
 
   sock.ev.on('creds.update', saveCreds);
+
+  // Address-book names, so a caller shows up as someone you recognise rather
+  // than a bare number. Both events fire during the initial sync and whenever
+  // you edit a contact on the phone.
+  sock.ev.on('chats.upsert', (list) => list.forEach(rememberChatMeta));
+  sock.ev.on('chats.update', (list) => list.forEach(rememberChatMeta));
+  sock.ev.on('contacts.upsert', (contacts) => contacts.forEach(rememberContact));
+  sock.ev.on('contacts.update', (contacts) => contacts.forEach(rememberContact));
+  // With syncFullHistory off, the address book arrives in the app-state payload
+  // rather than as contacts.upsert - so listen for both or get neither.
+  sock.ev.on('messaging-history.set', ({ contacts, chats: list }) => {
+    list?.forEach(rememberChatMeta);
+    if (!contacts?.length) return;
+    contacts.forEach(rememberContact);
+    log(`address book: ${contacts.length} contacts synced`);
+  });
 
   sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
     if (qr) {
       console.log('\nScan this with WhatsApp > Settings > Linked devices:\n');
       qrcode.generate(qr, { small: true });
+      // Also as a PNG: an ASCII QR in a log file is awkward to scan, and this
+      // one has to be scanned from a phone.
+      qrimage.toFile(QR_PATH, qr, { width: 512, margin: 2 }, (err) => {
+        log(err ? `could not write the QR image: ${err.message}` : `QR image written to ${QR_PATH}`);
+      });
     }
     if (connection === 'open') {
       log(`connected as ${sock.user?.id?.split(':')[0] || 'unknown'}; brain at ${BRAIN_URL}`);
       preresolveLids(sock);
+      resyncMetadata(sock);
+      if (!controlServer) controlServer = startControlServer(sock);
     }
     if (connection === 'close') {
       const status = new Boom(lastDisconnect?.error)?.output?.statusCode;
@@ -335,12 +615,30 @@ async function start() {
   });
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
+    // 'notify' is a message arriving live. 'append' is the backlog WhatsApp
+    // hands over after a reconnect - exactly the window every restart creates.
+    // Dropping it meant messages sent while this process was down counted as
+    // zero, so an 11-message run could sit at an unanswered count of 0.
+    //
+    // History sync arrives as 'append' too, and replaying weeks of old chats
+    // through the counter would fire bursts at everybody. Hence the age check:
+    // catch up on the last few minutes, ignore the archive.
+    if (type !== 'notify' && type !== 'append') return;
+
     for (const msg of messages) {
       // Message keys carry both address forms; free LID mapping.
       rememberLid(msg.key.senderLid, msg.key.senderPn);
       const jid = resolveJid(jidNormalizedUser(msg.key.remoteJid || ''));
       if (!jid.endsWith('@s.whatsapp.net')) continue; // skip groups + status
+
+      if (type === 'append') {
+        const age = Date.now() - timestampOf(msg);
+        if (!Number.isFinite(age) || age > APPEND_MAX_AGE_MS) continue;
+      }
+      // The same message can arrive live and again in a reconnect backlog;
+      // counting it twice would walk the burst counter past its threshold.
+      if (alreadySeen(msg.key.id)) continue;
+
       const fromMe = Boolean(msg.key.fromMe);
       remember(jid, fromMe ? 'me' : 'them', textOf(msg.message), msg.pushName);
       if (!fromMe) await maybeBurstReply(sock, jid);
@@ -440,10 +738,25 @@ async function start() {
         continue;
       }
 
+      // Snapshot the history before remember() appends our own reply to it, so
+      // the notification card does not show the reply twice.
+      const history = [...(chats.get(contactJid)?.messages || [])];
+
       try {
         await sock.sendMessage(contactJid, { text: decision.text });
         remember(contactJid, 'me', decision.text);
         log(`  sent to ${name}: ${decision.text}`);
+        reportSent({
+          platform: 'whatsapp',
+          contact_id: contactJid,
+          contact_name: name,
+          kind: 'call',
+          text: decision.text,
+          occurred_at: startedAt / 1000, // the brain works in seconds
+          reason,
+          video: isVideo,
+          history,
+        });
       } catch (err) {
         log(`  send to ${name} failed:`, err.message);
       }
@@ -453,6 +766,7 @@ async function start() {
 
 loadHistory();
 loadLidMap();
+loadContacts();
 start().catch((err) => {
   log('fatal:', err);
   process.exit(1);

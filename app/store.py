@@ -25,6 +25,13 @@ CREATE TABLE IF NOT EXISTS followups (
 );
 CREATE INDEX IF NOT EXISTS idx_followups_contact
     ON followups (platform, contact_id, kind, sent, created_at);
+
+-- Runtime switches flipped from the Telegram bot. Kept here rather than in
+-- .env so a pause survives a restart without anyone editing a file.
+CREATE TABLE IF NOT EXISTS controls (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 
@@ -88,6 +95,18 @@ class Store:
                 text,
                 time.time(),
             ),
+        )
+        self._db.commit()
+
+    def get_control(self, key: str) -> str | None:
+        row = self._db.execute("SELECT value FROM controls WHERE key = ?", (key,)).fetchone()
+        return None if row is None else row[0]
+
+    def set_control(self, key: str, value: str) -> None:
+        self._db.execute(
+            "INSERT INTO controls (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
         )
         self._db.commit()
 

@@ -40,13 +40,21 @@ def blocked_reason(
     call: Contact,
     seconds_since_last: float | None,
     cooldown_seconds: float | None = None,
+    allow: tuple[str, ...] | None = None,
 ) -> str:
-    """Empty string means go ahead; otherwise a human-readable skip reason."""
+    """Empty string means go ahead; otherwise a human-readable skip reason.
+
+    `allow` overrides ALLOW from .env, so entries added from the Telegram bot
+    take part in the same whitelist rather than being a second, separate test -
+    a whitelist only means anything when there is exactly one of it.
+    """
+    allow = settings.allow if allow is None else allow
+
     if not call.contact_id:
         return "no contact id"
     if settings.block and matches(settings.block, call):
         return "contact is on the block list"
-    if settings.allow and not matches(settings.allow, call):
+    if allow and not matches(allow, call):
         return "contact is not on the allow list"
     if in_quiet_hours(settings):
         return "inside quiet hours"

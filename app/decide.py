@@ -9,6 +9,7 @@ import logging
 
 from . import compose, gating
 from .config import Settings
+from .controls import Controls
 from .llm import LLMError, LMStudio
 from .models import Decision, MessageBurst, MissedCall
 from .store import Store
@@ -17,16 +18,44 @@ log = logging.getLogger(__name__)
 
 
 class Decider:
-    def __init__(self, settings: Settings, store: Store, llm: LMStudio) -> None:
+    def __init__(
+        self, settings: Settings, store: Store, llm: LMStudio, controls: Controls
+    ) -> None:
         self._settings = settings
         self._store = store
         self._llm = llm
+        self._controls = controls
+
+    def _runtime_block(self, platform: str, contact_id: str, contact_name: str) -> str:
+        """Switches flipped from the bot, checked before anything expensive."""
+        skip = self._controls.blocked_reason(platform)
+        if skip:
+            return skip
+        haystacks = (contact_id.lower(), contact_name.lower())
+        for blocked in self._controls.blocked:
+            if any(blocked.lower() in haystack for haystack in haystacks):
+                return f"blocked from the bot ({blocked})"
+        return ""
 
     async def decide(self, call: MissedCall) -> Decision:
         settings = self._settings
 
+        if not self._controls.calls_enabled:
+            skip = "missed-call follow-ups are off (/calls on to resume)"
+            log.info("skipping %s: %s", call.label, skip)
+            self._record(call, sent=False, skip_reason=skip, text="")
+            return Decision(send=False, skip_reason=skip)
+
+        skip = self._runtime_block(call.platform, call.contact_id, call.contact_name)
+        if skip:
+            log.info("skipping %s: %s", call.label, skip)
+            self._record(call, sent=False, skip_reason=skip, text="")
+            return Decision(send=False, skip_reason=skip)
+
         since = self._store.seconds_since_last_send(call.platform, call.contact_id)
-        skip = gating.blocked_reason(settings, call, since)
+        skip = gating.blocked_reason(
+            settings, call, since, allow=self._controls.effective_allow()
+        )
         if skip:
             log.info("skipping %s: %s", call.label, skip)
             self._record(call, sent=False, skip_reason=skip, text="")
@@ -34,7 +63,7 @@ class Decider:
 
         text, used_fallback = await self._write(call)
 
-        if settings.dry_run:
+        if self._controls.dry_run:
             log.info("DRY RUN %s would send: %s", call.label, text)
             self._record(call, sent=False, skip_reason="dry_run", text=text)
             return Decision(
@@ -57,16 +86,26 @@ class Decider:
         """
         settings = self._settings
 
-        if not settings.burst_enabled:
+        if not self._controls.burst_enabled:
             return Decision(send=False, skip_reason="burst replies are disabled")
         if burst.count < settings.burst_threshold:
             return Decision(send=False, skip_reason="below the burst threshold")
+
+        skip = self._runtime_block(burst.platform, burst.contact_id, burst.contact_name)
+        if skip:
+            log.info("burst: skipping %s: %s", burst.label, skip)
+            self._record_burst(burst, sent=False, skip_reason=skip, text="")
+            return Decision(send=False, skip_reason=skip)
 
         since = self._store.seconds_since_last_send(
             burst.platform, burst.contact_id, kind="burst"
         )
         skip = gating.blocked_reason(
-            settings, burst, since, cooldown_seconds=settings.burst_cooldown_hours * 3600
+            settings,
+            burst,
+            since,
+            cooldown_seconds=settings.burst_cooldown_hours * 3600,
+            allow=self._controls.effective_allow(),
         )
         if skip:
             log.info("burst: skipping %s: %s", burst.label, skip)
@@ -82,7 +121,7 @@ class Decider:
             sign=False,
         )
 
-        if settings.dry_run:
+        if self._controls.dry_run:
             log.info("burst DRY RUN %s would send: %s", burst.label, text)
             self._record_burst(burst, sent=False, skip_reason="dry_run", text=text)
             return Decision(send=False, text=text, skip_reason="dry_run")

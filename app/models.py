@@ -59,6 +59,45 @@ class MessageBurst:
 
 
 @dataclass(frozen=True, slots=True)
+class SendEvent:
+    """A reply that actually went out, on its way to your notification bot.
+
+    Built at the send site rather than in the Decider, because the Decider
+    commits to a send before the watcher performs it - and a send can still fail.
+    """
+
+    platform: str
+    contact_id: str
+    contact_name: str
+    kind: str  # "call" | "burst"
+    text: str
+    occurred_at: float  # when the call rang / the burst hit the threshold
+    # Telegram @username when they have one. Makes the notification's "open chat"
+    # link a t.me address, which resolves anywhere, instead of a tg:// user id.
+    contact_handle: str = ""
+    reason: str = ""
+    video: bool = False
+    count: int = 0
+    history: tuple[Message, ...] = field(default_factory=tuple)
+
+    @property
+    def label(self) -> str:
+        return f"{self.platform} {self.contact_name or self.contact_id}"
+
+    @property
+    def headline(self) -> str:
+        if self.kind == "burst":
+            return f"{self.count} unanswered messages"
+        kind = "video call" if self.video else "call"
+        return {
+            "rejected": f"Declined {kind}",
+            "busy": f"Declined {kind} (busy)",
+            "cancelled": f"Cancelled {kind}",
+            "disconnected": f"Dropped {kind}",
+        }.get(self.reason, f"Missed {kind}")
+
+
+@dataclass(frozen=True, slots=True)
 class Decision:
     send: bool
     text: str = ""

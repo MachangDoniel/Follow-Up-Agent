@@ -302,7 +302,7 @@ audit trail is the only way to answer "why did it message them?" after the fact.
 app/
   __main__.py          entry point: brain + Telegram watcher in one loop
   config.py            .env → frozen Settings dataclass, validated at startup
-  models.py            MissedCall / MessageBurst / Message / Decision
+  models.py            MissedCall / MessageBurst / Message / Decision / SendEvent
   decide.py            the single decision path both platforms use
   gating.py            allow / block / quiet hours / cooldown (pure functions)
   compose.py           prompts, honorific detection, cleaning, guardrails, sign-off
@@ -310,8 +310,13 @@ app/
   store.py             sqlite cooldowns + audit trail, with migrations
   brain.py             HTTP endpoints for the Node watcher
   telegram_watcher.py  Telethon MTProto call + message detection
+  notify.py            BotFather bot that tells you what was sent in your name
+  commands.py          the same bot, taking /off /block /status ... from you
+  controls.py          runtime switches, persisted, overriding .env
+  render.py            Pillow chat card attached to each notification (optional)
 whatsapp/watcher.js    Baileys call + message detection, LID mapping
 scripts/selftest.py    pre-flight: config, model, database, pairing, a sample message
+scripts/test_notify.py send yourself one fake notification
 scripts/service.sh     launchd management for both processes
 data/                  sessions, auth, sqlite, LID map   ← never commit
 logs/                  rotating logs from both processes ← never commit
@@ -340,4 +345,29 @@ undebuggable exactly when you need to debug it.
 ./scripts/service.sh logs          # follow both
 curl -s localhost:8787/recent      # every decision, with its reason
 uv run python scripts/selftest.py  # pre-flight, sends nothing
+uv run python scripts/test_notify.py  # one fake notification, to check the bot
 ```
+
+### Notifications (`notify.py`)
+
+Logs and `/recent` are pull-based: they tell you what happened once you go
+looking. The agent speaks in your name while you are elsewhere, so there is also
+a push channel — a BotFather bot that messages you after every reply that
+actually lands, with the contact, platform, timestamp, the text sent, and a
+rendered card of the surrounding conversation.
+
+Two design points worth keeping:
+
+- **It fires at the send site, not in the Decider.** The Decider commits to a
+  send — and records it, burning the cooldown — *before* any watcher performs it,
+  because a duplicate storm is worse than a missed follow-up. That makes the
+  Decider the wrong place to announce a delivery. The Telegram watcher calls the
+  notifier directly; the Node watcher reports back over `POST /sent`, which is
+  the only reason that endpoint exists.
+- **It is a bot, not the user session.** The Telethon session *is* you; a bot can
+  only reach people who wrote to it first. Pointing a notification channel at
+  yourself is exactly the case that constraint is for.
+
+Every failure inside `notify.py` is logged and swallowed. The reply has already
+gone out by then; a broken notification must never look like a failed send.
+`render.py` treats Pillow as optional and falls back to text-only.
