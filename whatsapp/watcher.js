@@ -93,18 +93,86 @@ function saveHistory() {
   }, 2000);
 }
 
-function textOf(message) {
-  if (!message) return '';
+/**
+ * Real content can be wrapped a few layers deep - disappearing messages, view
+ * once, a document sent with a caption. Unwrap before looking at anything.
+ */
+function unwrap(message) {
   return (
-    message.conversation ||
-    message.extendedTextMessage?.text ||
-    message.imageMessage?.caption ||
-    message.videoMessage?.caption ||
-    message.documentMessage?.caption ||
-    message.ephemeralMessage?.message?.conversation ||
-    message.ephemeralMessage?.message?.extendedTextMessage?.text ||
+    message?.ephemeralMessage?.message ||
+    message?.viewOnceMessage?.message ||
+    message?.viewOnceMessageV2?.message ||
+    message?.viewOnceMessageV2Extension?.message ||
+    message?.documentWithCaptionMessage?.message ||
+    message ||
+    null
+  );
+}
+
+function textOf(message) {
+  const inner = unwrap(message);
+  if (!inner) return '';
+  return (
+    inner.conversation ||
+    inner.extendedTextMessage?.text ||
+    inner.imageMessage?.caption ||
+    inner.videoMessage?.caption ||
+    inner.documentMessage?.caption ||
     ''
   ).trim();
+}
+
+// A photo with no caption is still someone waiting on you. remember() ignores
+// empty text, so media used to count for nothing at all - five stickers in a
+// row registered as zero unanswered messages. These stand in for the content so
+// the run is counted, and so the model can see what kind of thing arrived.
+const MEDIA_LABELS = {
+  imageMessage: 'photo',
+  videoMessage: 'video',
+  ptvMessage: 'video note',
+  audioMessage: 'voice message',
+  stickerMessage: 'sticker',
+  documentMessage: 'document',
+  contactMessage: 'contact',
+  contactsArrayMessage: 'contacts',
+  locationMessage: 'location',
+  liveLocationMessage: 'live location',
+  pollCreationMessage: 'poll',
+  pollCreationMessageV2: 'poll',
+  pollCreationMessageV3: 'poll',
+  productMessage: 'product',
+  orderMessage: 'order',
+  eventMessage: 'event',
+};
+
+// Not new messages: a reaction to something you sent, a delivery receipt, an
+// edit or a delete. Counting these towards a burst would fire replies at
+// someone who never actually wrote to you.
+const NOT_A_MESSAGE = new Set([
+  'reactionMessage',
+  'protocolMessage',
+  'senderKeyDistributionMessage',
+  'pollUpdateMessage',
+  'editedMessage',
+  'keepInChatMessage',
+  'messageContextInfo',
+]);
+
+function describeMedia(message) {
+  const inner = unwrap(message);
+  if (!inner) return '';
+  for (const [key, label] of Object.entries(MEDIA_LABELS)) {
+    if (inner[key]) return `[${label}]`;
+  }
+  return '';
+}
+
+/** True for reactions, receipts, edits - things that are not a message. */
+function isNotAMessage(message) {
+  const inner = unwrap(message);
+  if (!inner) return true;
+  const keys = Object.keys(inner).filter((k) => k !== 'messageContextInfo');
+  return keys.length > 0 && keys.every((k) => NOT_A_MESSAGE.has(k));
 }
 
 function remember(jid, from, text, pushName) {
@@ -670,24 +738,53 @@ async function start() {
     // History sync arrives as 'append' too, and replaying weeks of old chats
     // through the counter would fire bursts at everybody. Hence the age check:
     // catch up on the last few minutes, ignore the archive.
-    if (type !== 'notify' && type !== 'append') return;
+    // Logged unconditionally, including what gets dropped and why - the same
+    // rule the call handler follows. A message that silently never arrives is
+    // indistinguishable from one that arrived and was discarded, and that
+    // ambiguity cost days of guessing about why bursts never fired.
+    log(`messages.upsert: type=${type} count=${messages.length}`);
+
+    if (type !== 'notify' && type !== 'append') {
+      log(`  ignoring type=${type}`);
+      return;
+    }
 
     for (const msg of messages) {
       // Message keys carry both address forms; free LID mapping.
       rememberLid(msg.key.senderLid, msg.key.senderPn);
-      const jid = resolveJid(jidNormalizedUser(msg.key.remoteJid || ''));
-      if (!jid.endsWith('@s.whatsapp.net')) continue; // skip groups + status
+      const raw = jidNormalizedUser(msg.key.remoteJid || '');
+      const jid = resolveJid(raw);
+      const fromMe = Boolean(msg.key.fromMe);
+      // Media falls back to a label, so a caption-less photo still counts.
+      const text = textOf(msg.message) || describeMedia(msg.message);
 
+      if (!jid.endsWith('@s.whatsapp.net')) {
+        log(`  skipped ${raw} (group or status)`);
+        continue;
+      }
       if (type === 'append') {
         const age = Date.now() - timestampOf(msg);
-        if (!Number.isFinite(age) || age > APPEND_MAX_AGE_MS) continue;
+        if (!Number.isFinite(age) || age > APPEND_MAX_AGE_MS) {
+          log(`  skipped ${displayName(jid)} (backlog, ${Math.round(age / 60000)}m old)`);
+          continue;
+        }
       }
       // The same message can arrive live and again in a reconnect backlog;
       // counting it twice would walk the burst counter past its threshold.
-      if (alreadySeen(msg.key.id)) continue;
+      if (alreadySeen(msg.key.id)) {
+        log(`  skipped ${displayName(jid)} (already counted)`);
+        continue;
+      }
+      if (!text) {
+        const why = isNotAMessage(msg.message)
+          ? 'reaction, receipt or edit'
+          : `unrecognised type: ${Object.keys(unwrap(msg.message) || {}).join(',')}`;
+        log(`  skipped ${displayName(jid)} (${why})`);
+        continue;
+      }
 
-      const fromMe = Boolean(msg.key.fromMe);
-      remember(jid, fromMe ? 'me' : 'them', textOf(msg.message), msg.pushName);
+      log(`  ${fromMe ? 'you ->' : '->'} ${displayName(jid)}: ${text.slice(0, 60)}`);
+      remember(jid, fromMe ? 'me' : 'them', text, msg.pushName);
       if (!fromMe) await maybeBurstReply(sock, jid);
     }
   });
