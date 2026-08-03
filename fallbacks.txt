@@ -1,0 +1,47 @@
+# Fixed replies, used when the model is not consulted or its output is rejected.
+#
+# A missed call with no chat history gives the model nothing to personalise
+# from, so it is skipped entirely - which used to mean the same sentence went
+# out every single time. Anyone who called twice could tell. These say the same
+# thing thirty ways instead, picked at random, never the same one twice in a row.
+#
+# One per line. Blank lines and #comments ignored. Do not sign them: SIGNOFF is
+# appended separately, so a name here would appear twice.
+#
+# [casual] is used for everyone; [formal] replaces it for contacts whose saved
+# name carries an honorific (Bhai, Sir, Dada, Didi, Apu...), matching what the
+# model is told to do for those same contacts.
+
+[casual]
+sorry, couldn't pick up just now — i'll get back to you shortly.
+hey, missed your call. i'll ring you back in a bit.
+sorry, i was tied up and couldn't answer. talk soon.
+couldn't get to my phone in time — i'll call you back.
+sorry i missed that. give me a little while and i'll get back to you.
+was away from my phone, sorry. i'll catch you shortly.
+missed your call, sorry. i'll get back to you as soon as i can.
+sorry, couldn't answer right then. i'll reach out soon.
+hey, sorry — couldn't take that one. i'll call back.
+was in the middle of something, sorry. i'll get back to you.
+sorry i couldn't pick up. i'll ring you in a bit.
+missed that one, sorry. will get back to you shortly.
+couldn't answer just now, sorry. talk in a bit.
+sorry, my phone was out of reach. i'll call you back soon.
+hey, sorry i missed you. i'll come back to this shortly.
+couldn't pick up, sorry about that. i'll be in touch soon.
+sorry, was occupied. i'll get back to you in a little while.
+missed your call — sorry. i'll get back to you soon.
+couldn't take the call just now. i'll reach you shortly.
+sorry, i wasn't near my phone. will call you back.
+
+[formal]
+Sorry, I couldn't pick up just now — I'll get back to you shortly.
+Apologies, I was unable to take your call. I'll get back to you soon.
+Sorry I missed your call. I'll return it as soon as I can.
+I couldn't answer just now, sorry. I'll get back to you shortly.
+Apologies for missing your call — I'll be in touch very soon.
+Sorry, I was away from my phone. I'll call you back shortly.
+I couldn't take your call just now. Please give me a little time.
+Apologies, I missed your call. I'll get back to you as soon as possible.
+Sorry for not picking up — I'll return your call shortly.
+I was occupied and couldn't answer, sorry. I'll get back to you soon.

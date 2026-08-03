@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from . import compose, gating
+from . import compose, fallbacks as fallback_pool, gating
 from .config import Settings
 from .controls import Controls
 from .llm import LLMError, LMStudio
@@ -25,6 +25,15 @@ class Decider:
         self._store = store
         self._llm = llm
         self._controls = controls
+        self._fallbacks = fallback_pool.Fallbacks(
+            fallback_pool.load(settings.fallbacks_file), settings.fallback_text
+        )
+        if not self._fallbacks.count:
+            log.warning(
+                "no fixed replies loaded from %s; every no-history call will send the "
+                "same FALLBACK_TEXT",
+                settings.fallbacks_file,
+            )
 
     def _runtime_block(self, platform: str, contact_id: str, contact_name: str) -> str:
         """Switches flipped from the bot, checked before anything expensive."""
@@ -147,7 +156,12 @@ class Decider:
     async def _write(self, call: MissedCall) -> tuple[str, bool]:
         """Returns (text, used_fallback)."""
         settings = self._settings
-        fallback = compose.with_signoff(settings.fallback_text, settings)
+        # Chosen per call, in the same register the model would be told to use
+        # for this contact, so a fixed reply and a generated one do not sound
+        # like two different people.
+        fallback = compose.with_signoff(
+            self._fallbacks.pick(formal=compose.is_formal(call.contact_name)), settings
+        )
 
         # A bare missed call with no conversation gives the model nothing to
         # personalise from, so it would spend 15-30s producing something no

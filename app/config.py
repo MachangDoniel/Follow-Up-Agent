@@ -102,6 +102,7 @@ class Settings:
     your_name: str
     persona: str
     fallback_text: str
+    fallbacks_file: Path
     signoff: str
     max_chars: int
     history_messages: int
@@ -211,6 +212,7 @@ class Settings:
             your_name=_str("YOUR_NAME"),
             persona=_str("PERSONA"),
             fallback_text=_str("FALLBACK_TEXT", DEFAULT_FALLBACK),
+            fallbacks_file=_path("FALLBACKS_FILE", "fallbacks.txt"),
             signoff=signoff,
             max_chars=max_chars,
             history_messages=_int("HISTORY_MESSAGES", 10),

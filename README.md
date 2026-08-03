@@ -101,7 +101,8 @@ Everything lives in `.env`. Real environment variables override the file.
 | `COOLDOWN_MINUTES` | `30` | Don't message the same person twice inside this window. |
 | `MAX_CHARS` | `300` | Hard cap on the generated message. |
 | `HISTORY_MESSAGES` | `10` | How much recent chat to feed the model for context. |
-| `FALLBACK_TEXT` | … | Sent when LM Studio is down or the output fails the guardrail. |
+| `FALLBACKS_FILE` | `fallbacks.txt` | Pool of fixed replies, picked at random. See below. |
+| `FALLBACK_TEXT` | … | Last resort only, if the pool file is missing. |
 | `SIGNOFF` | empty | Appended verbatim on its own line to every message, including the fallback. Empty disables it. |
 | `ALLOW` | empty | If non-empty, **only** these contacts get a reply. Substring match on name or id. |
 | `BLOCK` | empty | These contacts never get a reply. |
@@ -255,6 +256,35 @@ and the code stamps the signature on afterwards.
 reduced by the signature length, so a long reply can't push the total over. If
 the model signs anyway, the duplicate is detected (ignoring case, spacing and
 punctuation) and not stamped twice.
+
+## The fixed replies
+
+A missed call with **no chat history** gives the model nothing to personalise
+from, so it is skipped entirely — 25 seconds of generation to produce something
+no better than a fixed line. The same applies when LM Studio is down or its
+output fails the guardrail.
+
+That fixed line used to be one sentence, which meant anyone who called twice got
+the identical message twice. `fallbacks.txt` holds thirty instead, picked at
+random and never the same one twice running:
+
+```
+[casual]
+sorry, couldn't pick up just now — i'll get back to you shortly.
+hey, missed your call. i'll ring you back in a bit.
+...
+[formal]
+Sorry, I couldn't pick up just now — I'll get back to you shortly.
+Apologies, I was unable to take your call. I'll get back to you soon.
+```
+
+The split matters. Contacts saved with an honorific — *Bhai, Sir, Dada, Didi,
+Apu* — already get a formal register from the model (`compose.is_formal`), and
+the fixed replies follow the same rule, so a generated reply and a fixed one
+don't sound like two different people.
+
+Edit the file and restart; it is plain text, one per line. Don't sign the lines —
+`SIGNOFF` is appended separately and would otherwise appear twice.
 
 ## Telling you what it did
 
