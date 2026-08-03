@@ -20,6 +20,9 @@ in `app/decide.py`, so both platforms behave identically.
 
 ---
 
+**[COMMANDS.md](COMMANDS.md)** is the everyday reference: every bot command,
+every terminal command, and what to do when something looks wrong.
+
 ## Read this before you run the WhatsApp side
 
 WhatsApp gives personal accounts no official way to see call events.
