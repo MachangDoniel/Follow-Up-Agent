@@ -54,7 +54,9 @@ class Candidate:
     kind: str  # "burst" | "call"
     count: int = 0
     reason: str = "missed"
-    age_seconds: float = 0.0
+    # None when WhatsApp gave us a count but no time to place it at - a chat
+    # delivered by a history sync before this process ever saw it.
+    age_seconds: float | None = 0.0
     status: str = ""  # what already happened to it, in your words
     actionable: bool = False
     history: tuple[Message, ...] = field(default_factory=tuple)
@@ -105,7 +107,7 @@ class Sweeper:
         """Everything that happened in the window, actionable or not."""
         found = await self._message_runs(window_seconds)
         found += self._calls(window_seconds)
-        found.sort(key=lambda c: c.age_seconds)
+        found.sort(key=lambda c: (c.age_seconds is None, c.age_seconds or 0))
         return found
 
     async def candidates(self, window_seconds: float) -> list[Candidate]:
@@ -126,18 +128,37 @@ class Sweeper:
         threshold = self._settings.burst_threshold
         out: list[Candidate] = []
         for chat in chats:
-            last_incoming = float(chat.get("last_incoming_at") or 0) / 1000
-            if not last_incoming:
-                continue  # never seen one arrive; no way to place it in the window
-            age = now - last_incoming
-            if age > window_seconds:
-                continue
-
+            # Our own timestamp, set when this process watched a message land.
+            # Chats that arrived through a history sync have none, so fall back
+            # to WhatsApp's own last-activity time - otherwise the very chats a
+            # sync exists to reveal are the ones the window filter drops.
             # `unanswered` is what this agent counted; `unread` is what your chat
             # list shows. They disagree after a restart, and the larger one is
             # the honest answer to "how many are they waiting on".
             count = max(int(chat.get("unanswered") or 0), int(chat.get("unread") or 0))
-            replied = float(chat.get("last_outgoing_at") or 0) / 1000 > last_incoming
+
+            last_incoming = float(chat.get("last_incoming_at") or 0) / 1000
+            last_activity = float(chat.get("last_activity_at") or 0) / 1000
+            when = last_incoming or last_activity
+
+            age: float | None
+            if when:
+                age = now - when
+                if age > window_seconds:
+                    continue
+            elif count:
+                # No timestamp, but people are demonstrably waiting. Reporting
+                # "nothing happened" while your chat list shows 11 unread is the
+                # worse error by far, so it is shown with its age marked unknown
+                # and left for you to judge before sending.
+                age = None
+            else:
+                continue
+
+            # Only meaningful when we know when their message landed.
+            replied = bool(last_incoming) and (
+                float(chat.get("last_outgoing_at") or 0) / 1000 > last_incoming
+            )
 
             if replied or count == 0:
                 status, actionable = "you replied", False

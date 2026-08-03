@@ -92,6 +92,11 @@ What the symbols in `/sweep` mean:
 | ✅ | You already replied yourself |
 | 🤖 | The bot already replied |
 
+If a row says **time unknown**, WhatsApp told us the count but not when it
+happened — that is normal for chats delivered by a history sync, before the
+agent ever watched a message arrive in them. They are shown in every window
+rather than hidden, so check the age looks sensible before `/sweep send`.
+
 ### Start over
 
 | Command | What happens |

@@ -201,7 +201,16 @@ function saveContacts() {
 
 function rememberContact(contact) {
   if (!contact?.id) return;
-  const jid = resolveJid(jidNormalizedUser(String(contact.id)));
+
+  // A Contact record carries both address forms: `lid` and `jid`. That is the
+  // lid -> phone direction WhatsApp exposes nowhere else, and it arrives for
+  // every contact in the address book at no cost. Ignoring it meant a caller
+  // could be in your contacts by name and still show as an unknown LID.
+  if (contact.lid && contact.jid) rememberLid(String(contact.lid), String(contact.jid));
+  const raw = jidNormalizedUser(String(contact.id));
+  if (raw.endsWith('@lid') && contact.jid) rememberLid(raw, String(contact.jid));
+
+  const jid = resolveJid(raw);
   const name = contact.name || contact.verifiedName || contact.notify || '';
   if (!jid || !name || contactNames.get(jid) === name) return;
   contactNames.set(jid, name);
@@ -221,9 +230,26 @@ function rememberChatMeta(chat) {
   if (!chat?.id) return;
   const jid = resolveJid(jidNormalizedUser(String(chat.id)));
   if (!jid.endsWith('@s.whatsapp.net')) return;
-  if (typeof chat.unreadCount !== 'number') return;
   const entry = chats.get(jid) || { messages: [] };
-  entry.unread = Math.max(0, chat.unreadCount);
+  let touched = false;
+
+  if (typeof chat.unreadCount === 'number') {
+    entry.unread = Math.max(0, chat.unreadCount);
+    touched = true;
+  }
+  // Seconds since epoch. Our own lastIncomingAt only exists for messages this
+  // process watched arrive, so a chat delivered by a history sync has none -
+  // and a sweep with a time window would silently drop it.
+  const stamp = chat.conversationTimestamp ?? chat.lastMessageRecvTimestamp;
+  const seconds = typeof stamp === 'object' && stamp !== null && typeof stamp.toNumber === 'function'
+    ? stamp.toNumber()
+    : Number(stamp);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    entry.lastActivityAt = seconds * 1000;
+    touched = true;
+  }
+
+  if (!touched) return;
   chats.set(jid, entry);
   saveHistory();
 }
@@ -435,21 +461,39 @@ function resolveJid(jid) {
  * each number's `lid`, which is the only way to build the lid -> phone direction.
  */
 function knownNumbers() {
-  const fromChats = [...chats.keys()]
-    .filter((jid) => jid.endsWith('@s.whatsapp.net'))
-    .map((jid) => jid.split('@')[0]);
+  const fromChats = [...chats.keys()].filter((jid) => jid.endsWith('@s.whatsapp.net'));
+  // The whole address book, not just people you have a chat with. A caller can
+  // be saved in your contacts and still arrive as a LID, which is exactly the
+  // case that looked like "unknown caller" for someone you speak to often.
+  const fromContacts = [...contactNames.keys()].filter((jid) =>
+    jid.endsWith('@s.whatsapp.net'),
+  );
   const configured = `${process.env.ALLOW || ''},${process.env.BLOCK || ''}`
     .split(',')
-    .map((s) => s.replace(/[^0-9]/g, ''));
-  return [...new Set([...fromChats, ...configured].filter((s) => s.length >= 8))];
+    .map((s) => `${s.replace(/[^0-9]/g, '')}@s.whatsapp.net`);
+
+  const already = new Set(lidMap.values());
+  return [
+    ...new Set(
+      [...fromChats, ...fromContacts, ...configured]
+        .filter((jid) => !already.has(jid))
+        .map((jid) => jid.split('@')[0])
+        .filter((digits) => digits.length >= 8),
+    ),
+  ];
 }
 
 async function preresolveLids(sock) {
   const numbers = knownNumbers();
-  if (!numbers.length) return;
+  if (!numbers.length) {
+    log('LID map already covers every known number');
+    return;
+  }
   let resolved = 0;
-  // Batched: onWhatsApp is one round trip per call, and a long contact list in
-  // a single request is the kind of thing WhatsApp rate-limits.
+  // Batched and paced. onWhatsApp is one round trip, an address book is
+  // hundreds of numbers, and hammering that endpoint is the kind of thing
+  // WhatsApp rate-limits. Only unmapped numbers are asked about, and the map
+  // is persisted, so this shrinks to nothing after the first run.
   for (let i = 0; i < numbers.length; i += 20) {
     const batch = numbers.slice(i, i + 20);
     try {
@@ -463,8 +507,9 @@ async function preresolveLids(sock) {
     } catch (err) {
       log('LID pre-resolution failed for a batch:', err.message);
     }
+    if (i + 20 < numbers.length) await sleep(1000);
   }
-  log(`pre-resolved ${resolved}/${numbers.length} known numbers to LIDs`);
+  log(`pre-resolved ${resolved}/${numbers.length} numbers to LIDs (${lidMap.size} mapped total)`);
 }
 
 // --------------------------------------------------------------------------
@@ -488,6 +533,7 @@ function chatList() {
       unanswered: entry.unanswered || 0,
       unread: entry.unread || 0,
       last_incoming_at: entry.lastIncomingAt || 0,
+      last_activity_at: entry.lastActivityAt || 0,
       last_outgoing_at: entry.lastOutgoingAt || 0,
       history: entry.messages || [],
     });
@@ -599,8 +645,9 @@ async function start() {
     }
     if (connection === 'open') {
       log(`connected as ${sock.user?.id?.split(':')[0] || 'unknown'}; brain at ${BRAIN_URL}`);
-      preresolveLids(sock);
       resyncMetadata(sock);
+      // Detached: hundreds of paced lookups must not delay call handling.
+      preresolveLids(sock).catch((err) => log('LID pre-resolution stopped:', err.message));
       if (!controlServer) controlServer = startControlServer(sock);
     }
     if (connection === 'close') {

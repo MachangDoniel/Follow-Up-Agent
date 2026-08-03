@@ -127,7 +127,7 @@ def describe_contact(platform: str, contact_name: str, contact_id: str) -> tuple
 CAPTION_LIMIT = 1000
 
 
-def ago(seconds: float) -> str:
+def ago(seconds: float | None) -> str:
     """Compact relative time: 5m, 3h, 2d, 4mo, 1y.
 
     Months are "mo", not "M". A set where minute and month differ only by the
@@ -137,6 +137,8 @@ def ago(seconds: float) -> str:
     Each unit floors rather than rounds, so nothing ever reads "24h ago" or
     "60m ago" - it rolls into the next unit instead.
     """
+    if seconds is None:
+        return "time unknown"
     minutes = int(max(0.0, seconds) // 60)
     if minutes < 1:
         return "just now"
