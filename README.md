@@ -283,6 +283,13 @@ Apu* — already get a formal register from the model (`compose.is_formal`), and
 the fixed replies follow the same rule, so a generated reply and a fixed one
 don't sound like two different people.
 
+A third section, `[burst]`, covers the other fixed reply — the one sent after
+several unanswered messages when the model fails. That one speaks *about* you
+rather than *as* you and says outright that it is automated, so it cannot share
+the call lines. `{name}` is replaced with `YOUR_NAME`. No casual/formal split:
+a notice announcing itself as automated is already formal, and slang would
+undercut the one thing it has to communicate.
+
 Edit the file and restart; it is plain text, one per line. Don't sign the lines —
 `SIGNOFF` is appended separately and would otherwise appear twice.
 

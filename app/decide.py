@@ -123,9 +123,14 @@ class Decider:
 
         # A burst always carries context - their own messages - so the model has
         # something real to work with. No sign-off: the reply says it is not you.
+        # Its own pool, in its own voice: this one speaks *about* you and says
+        # outright that it is automated, so it cannot borrow the call lines.
+        burst_fallback = self._fallbacks.pick(
+            fallback_pool.BURST, your_name=settings.your_name
+        )
         text, _ = await self._generate(
             *compose.build_burst_prompt(settings, burst),
-            settings.burst_text,
+            burst_fallback,
             burst.label,
             sign=False,
         )
@@ -159,9 +164,12 @@ class Decider:
         # Chosen per call, in the same register the model would be told to use
         # for this contact, so a fixed reply and a generated one do not sound
         # like two different people.
-        fallback = compose.with_signoff(
-            self._fallbacks.pick(formal=compose.is_formal(call.contact_name)), settings
+        register = (
+            fallback_pool.FORMAL
+            if compose.is_formal(call.contact_name)
+            else fallback_pool.CASUAL
         )
+        fallback = compose.with_signoff(self._fallbacks.pick(register), settings)
 
         # A bare missed call with no conversation gives the model nothing to
         # personalise from, so it would spend 15-30s producing something no

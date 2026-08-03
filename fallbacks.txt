@@ -45,3 +45,35 @@ I couldn't take your call just now. Please give me a little time.
 Apologies, I missed your call. I'll get back to you as soon as possible.
 Sorry for not picking up — I'll return your call shortly.
 I was occupied and couldn't answer, sorry. I'll get back to you soon.
+
+# Burst replies: sent after several unanswered messages, when the model fails.
+# A different voice entirely - it speaks *about* you, not *as* you, and says
+# outright that it is automated. That is deliberate: someone sending five
+# messages in a row may be upset or dealing with something urgent, and a line
+# pretending to be you would be worse than one admitting it is not.
+#
+# No casual/formal split here. A notice announcing itself as automated is
+# already formal by nature, and slang would undercut the one thing it has to
+# communicate clearly. {name} is replaced with YOUR_NAME.
+
+[burst]
+Hi, this is an automated reply — {name} is busy at the moment and hasn't seen your messages yet, but will get back to you soon.
+This is an automated message. {name} hasn't seen these yet and will reply when free.
+Automated reply: {name} is tied up right now. Your messages will be read shortly.
+This is an auto-reply — {name} is away from the phone at the moment and will respond soon.
+Automated message: {name} has not seen your messages yet, but will get to them.
+This is an automatic reply. {name} is occupied right now and will respond as soon as possible.
+Auto-reply: {name} is unavailable at the moment. Your messages have not been missed.
+This is an automated notice — {name} will read these and reply when there is a chance.
+Automated reply: {name} is busy just now. Nothing here has been overlooked.
+This is an auto-response. {name} is not available at the moment but will be in touch.
+Automated message — {name} is away right now and will come back to this shortly.
+This is an automatic reply: {name} has been unavailable and will respond soon.
+Auto-reply — {name} is occupied at the moment. Your messages are waiting to be read.
+This is an automated response. {name} will get back to you as soon as possible.
+Automated notice: {name} is tied up and hasn't been able to reply yet.
+This is an auto-reply. {name} is busy at present and will answer when free.
+Automated message: {name} is away from the phone but will read these shortly.
+This is an automatic response — {name} is unavailable now and will reply soon.
+Auto-reply: {name} has not seen these messages yet and will respond when possible.
+This is an automated reply — {name} is occupied right now but will be in touch soon.

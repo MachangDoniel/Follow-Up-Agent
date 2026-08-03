@@ -14,17 +14,22 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 from pathlib import Path
 
 log = logging.getLogger(__name__)
 
 CASUAL = "casual"
 FORMAL = "formal"
+BURST = "burst"
+
+# Used when YOUR_NAME is empty, so a burst line stays grammatical.
+ANONYMOUS = "the person you're trying to reach"
 
 
 def load(path: Path) -> dict[str, tuple[str, ...]]:
     """Parse the pool file into {register: lines}. Missing file yields {}."""
-    pools: dict[str, list[str]] = {CASUAL: [], FORMAL: []}
+    pools: dict[str, list[str]] = {CASUAL: [], FORMAL: [], BURST: []}
     current = CASUAL
     try:
         text = path.read_text()
@@ -56,13 +61,12 @@ class Fallbacks:
     def count(self) -> int:
         return sum(len(lines) for lines in self._pools.values())
 
-    def pick(self, *, formal: bool = False) -> str:
-        register = FORMAL if formal else CASUAL
+    def pick(self, register: str = CASUAL, *, your_name: str = "") -> str:
         options = self._pools.get(register) or self._pools.get(CASUAL) or ()
         if not options:
             return self._default
         if len(options) == 1:
-            return options[0]
+            return self._personalise(options[0], your_name)
 
         # Avoid an immediate repeat. Sampling until it differs would be fine
         # with 20 options and unbounded with 2, so exclude it outright.
@@ -70,4 +74,22 @@ class Fallbacks:
         choices = [line for line in options if line != last] or list(options)
         chosen = random.choice(choices)
         self._last[register] = chosen
-        return chosen
+        return self._personalise(chosen, your_name)
+
+    @staticmethod
+    def _personalise(text: str, your_name: str) -> str:
+        """Substitute {name}, capitalising the stand-in when it opens a sentence.
+
+        A real name is already capitalised; ANONYMOUS is a common noun, so
+        "This is an automatic reply. the person you're trying to reach..."
+        needs fixing and "— the person you're trying to reach" does not.
+        """
+        if your_name:
+            return text.replace("{name}", your_name)
+
+        def substitute(match: re.Match[str]) -> str:
+            before = text[: match.start()].rstrip()
+            opens = not before or before[-1] in ".!?"
+            return ANONYMOUS[0].upper() + ANONYMOUS[1:] if opens else ANONYMOUS
+
+        return re.sub(r"\{name\}", substitute, text)
