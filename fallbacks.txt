@@ -77,3 +77,19 @@ Automated message: {name} is away from the phone but will read these shortly.
 This is an automatic response — {name} is unavailable now and will reply soon.
 Auto-reply: {name} has not seen these messages yet and will respond when possible.
 This is an automated reply — {name} is occupied right now but will be in touch soon.
+
+# Group-mention replies: sent in a group or thread where you were @mentioned, when
+# the model fails or there is no history to personalise from. These speak on your
+# behalf in a group context. {name} is replaced with YOUR_NAME.
+
+[mention]
+Hey, {name} is away right now but will catch up on this thread soon.
+{name} is not available at the moment — will respond when back.
+Just to flag: {name} has been tagged here and will follow up when free.
+{name} hasn't seen this yet. Will get back to the group shortly.
+Heads up — {name} is occupied right now but will respond to this mention soon.
+{name} is away at the moment and will pick this up when back.
+Just a note that {name} has been mentioned here and will reply when available.
+{name} is currently unavailable but will get back to this shortly.
+This is an auto-reply: {name} has been tagged and will respond as soon as possible.
+{name} hasn't had a chance to see this yet — will follow up shortly.

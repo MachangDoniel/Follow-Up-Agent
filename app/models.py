@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-Platform = Literal["telegram", "whatsapp"]
+Platform = Literal["telegram", "whatsapp", "gchat", "teams"]
 
 # Why the call ended without being answered.
 Reason = Literal["missed", "rejected", "busy", "cancelled", "disconnected"]
@@ -59,6 +59,28 @@ class MessageBurst:
 
 
 @dataclass(frozen=True, slots=True)
+class GroupMention:
+    """Someone @mentioned you in a group chat on Google Chat or Teams."""
+
+    platform: str
+    contact_id: str
+    contact_name: str
+    group_id: str
+    group_name: str
+    message_text: str  # the message that contained the @mention
+    history: tuple[Message, ...] = field(default_factory=tuple)
+
+    @property
+    def label(self) -> str:
+        return f"{self.platform} {self.contact_name or self.contact_id} in {self.group_name or self.group_id}"
+
+    @property
+    def cooldown_key(self) -> str:
+        # Cooldown is per-contact, not per-group, matching call behaviour.
+        return f"{self.platform}:{self.contact_id}"
+
+
+@dataclass(frozen=True, slots=True)
 class SendEvent:
     """A reply that actually went out, on its way to your notification bot.
 
@@ -69,7 +91,7 @@ class SendEvent:
     platform: str
     contact_id: str
     contact_name: str
-    kind: str  # "call" | "burst"
+    kind: str  # "call" | "burst" | "mention"
     text: str
     occurred_at: float  # when the call rang / the burst hit the threshold
     # Telegram @username when they have one. Makes the notification's "open chat"
@@ -79,6 +101,9 @@ class SendEvent:
     video: bool = False
     count: int = 0
     history: tuple[Message, ...] = field(default_factory=tuple)
+    group_id: str = ""
+    group_name: str = ""
+    message_text: str = ""
 
     @property
     def label(self) -> str:
@@ -88,6 +113,9 @@ class SendEvent:
     def headline(self) -> str:
         if self.kind == "burst":
             return f"{self.count} unanswered messages"
+        if self.kind == "mention":
+            group = self.group_name or self.group_id or "a group"
+            return f"@mentioned in {group}"
         kind = "video call" if self.video else "call"
         return {
             "rejected": f"Declined {kind}",

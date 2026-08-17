@@ -802,6 +802,11 @@ async function start() {
           `${call.offline ? ' offline' : ''}`,
       );
 
+      if (call.offline) {
+        log(`  offline call event, ignoring to prevent stale/duplicate follow-ups`);
+        continue;
+      }
+
       if (call.status === 'offer') {
         activeCalls.set(call.id, {
           jid,

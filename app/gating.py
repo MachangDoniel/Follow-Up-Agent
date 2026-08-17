@@ -5,9 +5,9 @@ from __future__ import annotations
 import time
 
 from .config import Settings
-from .models import MessageBurst, MissedCall
+from .models import GroupMention, MessageBurst, MissedCall
 
-Contact = MissedCall | MessageBurst
+Contact = MissedCall | MessageBurst | GroupMention
 
 
 def matches(patterns: tuple[str, ...], call: Contact) -> bool:

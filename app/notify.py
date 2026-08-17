@@ -25,7 +25,12 @@ from .models import SendEvent
 
 log = logging.getLogger(__name__)
 
-PLATFORM_LABEL = {"telegram": "Telegram", "whatsapp": "WhatsApp"}
+PLATFORM_LABEL = {
+    "telegram": "Telegram",
+    "whatsapp": "WhatsApp",
+    "gchat": "Google Chat",
+    "teams": "Microsoft Teams",
+}
 
 
 def _load_json(path: Path) -> dict[str, str]:
@@ -200,7 +205,12 @@ class Notifier:
         platform = PLATFORM_LABEL.get(event.platform, event.platform.title())
         when = time.localtime(event.occurred_at)
         elapsed = ago(time.time() - event.occurred_at)
-        icon = "💬" if event.kind == "burst" else "📞"
+        if event.kind == "burst":
+            icon = "💬"
+        elif event.kind == "mention":
+            icon = "🔔"
+        else:
+            icon = "📞"
 
         # Same resolution the bot's /status uses, so a caller is described
         # identically whether you read about them in a push or ask after it.
@@ -213,6 +223,11 @@ class Notifier:
         lines = [
             f"{icon} <b>{html.escape(event.headline)}</b> · {platform}",
             f"👤 {who}",
+        ]
+        if event.kind == "mention" and (event.group_name or event.group_id):
+            group = html.escape(event.group_name or event.group_id)
+            lines.append(f"👥 {group}")
+        lines += [
             f"🕐 {time.strftime('%-I:%M %p, %-d %b', when)} · {elapsed}",
         ]
         link = self._chat_link(event)

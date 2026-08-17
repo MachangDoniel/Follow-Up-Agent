@@ -141,6 +141,23 @@ class Settings:
     whatsapp_control_port: int
     sweep_window_minutes: int
 
+    # Google Chat bot
+    gchat_enabled: bool
+    gchat_service_account_file: Path
+    gchat_project_id: str
+    gchat_pubsub_subscription: str  # projects/{proj}/subscriptions/{name}
+    gchat_bot_name: str  # the @-name the bot was registered under
+
+    # Microsoft Teams bot
+    teams_enabled: bool
+    teams_app_id: str
+    teams_app_password: str
+    teams_tenant_id: str  # "common" works for multi-tenant
+    teams_bot_port: int   # local webhook port (expose via ngrok for dev)
+
+    # Group mention replies (gchat + teams)
+    mention_cooldown_minutes: int
+
     database_path: Path
     log_level: str
     log_file: Path
@@ -240,6 +257,17 @@ class Settings:
             notify_bursts=_bool("NOTIFY_BURSTS", True),
             whatsapp_control_port=_int("WHATSAPP_CONTROL_PORT", 8788),
             sweep_window_minutes=_int("SWEEP_WINDOW_MINUTES", 60),
+            gchat_enabled=_bool("GCHAT_ENABLED", False),
+            gchat_service_account_file=_path("GCHAT_SERVICE_ACCOUNT_FILE", "data/gchat-service-account.json"),
+            gchat_project_id=_str("GCHAT_PROJECT_ID"),
+            gchat_pubsub_subscription=_str("GCHAT_PUBSUB_SUBSCRIPTION"),
+            gchat_bot_name=_str("GCHAT_BOT_NAME"),
+            teams_enabled=_bool("TEAMS_ENABLED", False),
+            teams_app_id=_str("TEAMS_APP_ID"),
+            teams_app_password=_str("TEAMS_APP_PASSWORD"),
+            teams_tenant_id=_str("TEAMS_TENANT_ID", "common"),
+            teams_bot_port=_int("TEAMS_BOT_PORT", 8789),
+            mention_cooldown_minutes=_int("MENTION_COOLDOWN_MINUTES", 30),
             database_path=_path("DATABASE_PATH", "data/followups.sqlite3"),
             log_level=_str("LOG_LEVEL", "INFO").upper(),
             log_file=_path("LOG_FILE", "logs/call-followup.log"),

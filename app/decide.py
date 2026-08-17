@@ -11,7 +11,7 @@ from . import compose, fallbacks as fallback_pool, gating
 from .config import Settings
 from .controls import Controls
 from .llm import LLMError, LMStudio
-from .models import Decision, MessageBurst, MissedCall
+from .models import Decision, GroupMention, MessageBurst, MissedCall
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -144,6 +144,58 @@ class Decider:
         log.info("burst: sending to %s after %d unanswered", burst.label, burst.count)
         return Decision(send=True, text=text)
 
+    async def decide_mention(self, mention: GroupMention) -> Decision:
+        """Someone @mentioned you in a group chat.
+
+        Reply in the group, on your behalf, using the model. Falls back to a
+        fixed pool line if the model fails or there is nothing to personalise.
+        The same safety stack as decide_burst — runtime block, gating, cooldown.
+        """
+        settings = self._settings
+
+        if not self._controls.mentions_enabled:
+            return Decision(send=False, skip_reason="group mention replies are off (/mentions on to resume)")
+
+        skip = self._runtime_block(mention.platform, mention.contact_id, mention.contact_name)
+        if skip:
+            log.info("mention: skipping %s: %s", mention.label, skip)
+            self._record_mention(mention, sent=False, skip_reason=skip, text="")
+            return Decision(send=False, skip_reason=skip)
+
+        since = self._store.seconds_since_last_send(
+            mention.platform, mention.contact_id, kind="mention"
+        )
+        skip = gating.blocked_reason(
+            settings,
+            mention,
+            since,
+            cooldown_seconds=settings.mention_cooldown_minutes * 60,
+            allow=self._controls.effective_allow(),
+        )
+        if skip:
+            log.info("mention: skipping %s: %s", mention.label, skip)
+            self._record_mention(mention, sent=False, skip_reason=skip, text="")
+            return Decision(send=False, skip_reason=skip)
+
+        mention_fallback = self._fallbacks.pick(
+            fallback_pool.MENTION, your_name=settings.your_name
+        )
+        text, _ = await self._generate(
+            *compose.build_mention_prompt(settings, mention),
+            mention_fallback,
+            mention.label,
+            sign=False,
+        )
+
+        if self._controls.dry_run:
+            log.info("mention DRY RUN %s would send: %s", mention.label, text)
+            self._record_mention(mention, sent=False, skip_reason="dry_run", text=text)
+            return Decision(send=False, text=text, skip_reason="dry_run")
+
+        self._record_mention(mention, sent=True, skip_reason="", text=text)
+        log.info("mention: sending to %s", mention.label)
+        return Decision(send=True, text=text)
+
     def _record_burst(
         self, burst: MessageBurst, *, sent: bool, skip_reason: str, text: str
     ) -> None:
@@ -153,6 +205,20 @@ class Decider:
             contact_name=burst.contact_name,
             reason=f"{burst.count} unanswered messages",
             kind="burst",
+            sent=sent,
+            skip_reason=skip_reason,
+            text=text,
+        )
+
+    def _record_mention(
+        self, mention: GroupMention, *, sent: bool, skip_reason: str, text: str
+    ) -> None:
+        self._store.record(
+            platform=mention.platform,
+            contact_id=mention.contact_id,
+            contact_name=mention.contact_name,
+            reason=f"@mentioned in {mention.group_name or mention.group_id}",
+            kind="mention",
             sent=sent,
             skip_reason=skip_reason,
             text=text,

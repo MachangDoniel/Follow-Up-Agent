@@ -11,6 +11,7 @@ dependencies = [
     # Draws the conversation card attached to each notification. Optional at
     # runtime: app/render.py degrades to text-only notifications without it.
     "pillow>=10.0",
+    "cryptography>=50.0.0",
 ]
 
 [tool.uv]

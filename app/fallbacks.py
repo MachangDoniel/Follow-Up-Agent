@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 CASUAL = "casual"
 FORMAL = "formal"
 BURST = "burst"
+MENTION = "mention"
 
 # Used when YOUR_NAME is empty, so a burst line stays grammatical.
 ANONYMOUS = "the person you're trying to reach"

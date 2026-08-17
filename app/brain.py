@@ -24,7 +24,7 @@ from aiohttp import web
 
 from .config import Settings
 from .decide import Decider
-from .models import Message, MessageBurst, MissedCall, SendEvent
+from .models import GroupMention, Message, MessageBurst, MissedCall, SendEvent
 from .notify import Notifier
 from .store import Store
 
@@ -146,6 +146,32 @@ def build_app(
             )
         return web.json_response(decision.as_json())
 
+    async def mention(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                raise ValueError("body must be a JSON object")
+            event = GroupMention(
+                platform=str(payload.get("platform") or "unknown"),
+                contact_id=str(payload.get("contact_id") or ""),
+                contact_name=str(payload.get("contact_name") or ""),
+                group_id=str(payload.get("group_id") or ""),
+                group_name=str(payload.get("group_name") or ""),
+                message_text=str(payload.get("message_text") or ""),
+                history=parse_history(payload),
+            )
+        except (ValueError, TypeError) as exc:
+            return web.json_response({"error": f"bad request: {exc}"}, status=400)
+
+        try:
+            decision = await decider.decide_mention(event)
+        except Exception:
+            log.exception("decide_mention() failed for %s", event.label)
+            return web.json_response(
+                {"send": False, "text": "", "skip_reason": "internal error"}
+            )
+        return web.json_response(decision.as_json())
+
     async def sent(request: web.Request) -> web.Response:
         try:
             event = parse_sent(await request.json())
@@ -167,6 +193,7 @@ def build_app(
             web.get("/recent", recent),
             web.post("/followup", followup),
             web.post("/burst", burst),
+            web.post("/mention", mention),
             web.post("/sent", sent),
         ]
     )

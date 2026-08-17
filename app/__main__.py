@@ -16,10 +16,12 @@ from .commands import CommandServer
 from .config import ConfigError, Settings
 from .controls import Controls
 from .decide import Decider
+from .gchat_watcher import GoogleChatWatcher
 from .llm import LMStudio
 from .notify import Notifier
 from .store import Store
 from .sweep import Sweeper
+from .teams_watcher import TeamsBotWatcher
 from .telegram_watcher import TelegramWatcher
 
 log = logging.getLogger("app")
@@ -70,6 +72,22 @@ async def run(settings: Settings) -> None:
     else:
         log.info("Telegram watcher disabled (TELEGRAM_ENABLED=false)")
 
+    gchat: GoogleChatWatcher | None = None
+    if settings.gchat_enabled:
+        gchat = GoogleChatWatcher(settings)
+        tasks.append(asyncio.create_task(gchat.run()))
+        log.info("Google Chat watcher enabled (Pub/Sub pull)")
+    else:
+        log.info("Google Chat watcher disabled (GCHAT_ENABLED=false)")
+
+    teams: TeamsBotWatcher | None = None
+    if settings.teams_enabled:
+        teams = TeamsBotWatcher(settings)
+        tasks.append(asyncio.create_task(teams.run()))
+        log.info("Teams bot watcher enabled (port %s)", settings.teams_bot_port)
+    else:
+        log.info("Teams bot watcher disabled (TEAMS_ENABLED=false)")
+
     try:
         if tasks:
             await asyncio.gather(*tasks)
@@ -86,6 +104,10 @@ async def run(settings: Settings) -> None:
         if command_server is not None:
             await command_server.aclose()
         await sweeper.aclose()
+        if gchat is not None:
+            await gchat.aclose()
+        if teams is not None:
+            await teams.aclose()
         store.close()
 
 

@@ -20,7 +20,7 @@ from .store import Store
 
 log = logging.getLogger(__name__)
 
-PLATFORMS = ("whatsapp", "telegram")
+PLATFORMS = ("whatsapp", "telegram", "gchat", "teams")
 
 
 class Controls:
@@ -97,6 +97,15 @@ class Controls:
     def burst_enabled(self, value: bool) -> None:
         self._set_bool("burst", value)
 
+    @property
+    def mentions_enabled(self) -> bool:
+        """Group mention replies on Google Chat and Teams."""
+        return self._bool("mentions", True)
+
+    @mentions_enabled.setter
+    def mentions_enabled(self, value: bool) -> None:
+        self._set_bool("mentions", value)
+
     def _list(self, key: str) -> tuple[str, ...]:
         return tuple(p.strip() for p in self._get(key, "").split(",") if p.strip())
 
@@ -155,6 +164,7 @@ class Controls:
         self.dry_run = self._settings.dry_run
         self.calls_enabled = True
         self.burst_enabled = self._settings.burst_enabled
+        self.mentions_enabled = True
         self._store.set_control("blocked", "")
         self._store.set_control("allowed", "")
         for platform in PLATFORMS:
@@ -185,6 +195,7 @@ class Controls:
             "dry_run": self.dry_run,
             "calls": self.calls_enabled,
             "burst": self.burst_enabled,
+            "mentions": self.mentions_enabled,
             "blocked": self.blocked,
             "allowed": self.allowed,
         }

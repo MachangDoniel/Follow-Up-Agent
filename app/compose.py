@@ -6,7 +6,7 @@ import re
 import time
 
 from .config import Settings
-from .models import REASON_TEXT, MessageBurst, MissedCall
+from .models import REASON_TEXT, GroupMention, MessageBurst, MissedCall
 
 SYSTEM_PROMPT = """You write short follow-up text messages on behalf of {name}, \
 who has just failed to take an incoming call.
@@ -161,6 +161,53 @@ def build_burst_prompt(settings: Settings, burst: MessageBurst) -> tuple[str, st
 
     lines += ["", f"Write the holding reply to send {contact} on {name}'s behalf."]
     return system, "\n".join(lines)
+
+
+MENTION_SYSTEM_PROMPT = """\
+You are the personal assistant of {name}, writing a brief reply in a group chat \
+where {name} has just been @mentioned.
+
+Rules:
+- Output ONLY the message text. No quotation marks, no preamble, no explanation.
+- One or two short sentences. Under {max_chars} characters.
+- Make clear you are replying on {name}'s behalf, not as {name}.
+- Say {name} has been mentioned but is not available right now.
+- Do NOT answer any question in the message, agree to anything, or make any \
+commitment for {name}. You do not know the answers.
+- Write in the same language AND the same script the original message uses. \
+If unclear, use English.
+- Never invent facts: not where {name} is, not what they are doing, not when \
+they will reply.
+- Never name a specific time or day. Vague is correct: "when available", "shortly".\
+"""
+
+
+def build_mention_prompt(settings: Settings, mention: GroupMention) -> tuple[str, str]:
+    name = settings.your_name or "the user"
+    contact = mention.contact_name or "someone"
+    group = mention.group_name or mention.group_id or "a group"
+    platform = mention.platform.replace("gchat", "Google Chat").replace("teams", "Microsoft Teams")
+
+    system = MENTION_SYSTEM_PROMPT.format(name=name, max_chars=settings.max_chars)
+
+    lines = [
+        f"{contact} @mentioned {name} in the group '{group}' on {platform}.",
+        f"Their message: {mention.message_text[:400]}" if mention.message_text else "",
+        f"Local time now: {time.strftime('%A %H:%M')}.",
+        "",
+    ]
+
+    history = mention.history[-settings.history_messages:]
+    if history:
+        lines.append("Recent messages in this thread (oldest first):")
+        for message in history:
+            who = name if message.sender == "me" else contact
+            text = message.text.replace("\n", " ").strip()
+            if text:
+                lines.append(f"{who}: {text[:400]}")
+
+    lines += ["", f"Write a short reply {name}'s assistant should post in the group."]
+    return system, "\n".join(line for line in lines if line is not None)
 
 
 def clean(raw: str, max_chars: int) -> str:
